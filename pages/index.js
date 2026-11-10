@@ -52,7 +52,7 @@ export default function Genre({ pop, metal, evergreen, cartoons, christmas, summ
     }
 
     return (
-        <div className="grid grid-cols-3 items-center">
+        <div className="grid grid-cols-2 sm:grid-cols-3 items-center gap-y-6 sm:gap-y-0 px-2 sm:px-0 py-4 sm:py-0">
             {genres.map((genre, index) =>
                 <GenreCard
                     i={index+1}

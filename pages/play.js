@@ -40,8 +40,17 @@ export default function Play({ title, url, thumbnail }) {
     window.location.href = '/'
   }
 
-  function play(ms) {
+  async function play(ms) {
     const player = document.querySelector('audio')
+
+    setPlaying(true)
+    try {
+      await player.play()
+    } catch (e) {
+      console.error(e)
+      setPlaying(false)
+      return
+    }
 
     if (ms >= 0) {
       setTimeout(() => {
@@ -50,28 +59,25 @@ export default function Play({ title, url, thumbnail }) {
         setPlaying(false)
       }, ms)
     }
-
-    setPlaying(true)
-    player.play()
   }
 
   return (
-    <div className="flex flex-col items-center text-center justify-center">
+    <div className="flex flex-col items-center text-center justify-center px-2">
       <h1 className="font-bold text-4xl">Score: {score}</h1>
 
       <div className={`${!guessed && 'hidden'} flex flex-col items-center`}>
         <p className=''>{title.length > 30 ? title.slice(0,30)+'...' : title}</p>
-        <img src={thumbnail} className="h-[300px] min-h-[300px] self-center rounded-sm shadow-xl shadow-lime-50"/>
+        <img src={thumbnail} className="h-[70vw] min-h-[70vw] sm:h-[300px] sm:min-h-[300px] max-w-[90vw] object-cover self-center rounded-sm shadow-xl shadow-lime-50"/>
         <button onClick={nextSongHandler} className="mt-2 rounded-full px-2 py-1 border-4 border-lime-50 shadow-white shadow-lg hover:bg-lime-50 hover:text-[#0F0F19] transition duration-500 hover:scale-110">Next song!</button>
       </div>
 
-      <div className={`${guessed && 'hidden'} flex flex-row justify-evenly w-4/5 text-3xl`}>
-        <button id="next-hint" onClick={nextHintHandler} disabled={playing} className={`rounded ${ !playing && 'text-red-300 hover:scale-110 focus:scale-110 outline-0' } p-1 transition-all duration-500`}>Help?</button>
-        <button id="listen-again" onClick={listenAgainHandler} disabled={playing} className={`rounded ${ !playing && 'text-yellow-300 hover:scale-110 focus:scale-110 outline-0' } p-1 transition-all duration-500`}>Play</button>
-        <button id="guess" onClick={guessHandler} disabled={playing} className={`rounded ${ !playing && 'text-emerald-400 hover:scale-110 focus:scale-110 outline-0' } p-1 transition-all duration-500`}>Tell me</button>
+      <div className={`${guessed && 'hidden'} flex flex-row justify-evenly w-full sm:w-4/5 text-2xl sm:text-3xl whitespace-nowrap`}>
+        <button id="next-hint" onClick={nextHintHandler} disabled={playing} className={`rounded text-[0.8rem] sm:text-[1rem] ${ !playing && 'text-red-300 hover:scale-110 focus:scale-110 outline-0' } p-1 transition-all duration-500`}>Help?</button>
+        <button id="listen-again" onClick={listenAgainHandler} disabled={playing} className={`rounded text-[0.8rem] sm:text-[1rem] ${ !playing && 'text-yellow-300 hover:scale-110 focus:scale-110 outline-0' } p-1 transition-all duration-500`}>Play</button>
+        <button id="guess" onClick={guessHandler} disabled={playing} className={`rounded text-[0.8rem] sm:text-[1rem] ${ !playing && 'text-emerald-400 hover:scale-110 focus:scale-110 outline-0' } p-1 transition-all duration-500`}>Tell me</button>
       </div>
 
-      <audio src={url} preload="auto" />
+      <audio src={url} preload="auto" playsInline />
     </div>
   )
 }
