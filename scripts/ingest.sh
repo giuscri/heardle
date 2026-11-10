@@ -19,7 +19,7 @@
 #
 # Needs deno (JS runtime used by yt-dlp to solve YouTube challenges).
 #
-# Usage: S3_BUCKET=... [YTDLP_COOKIES=cookies.txt] [JOBS=1] ./ingest.sh [genre...]
+# Usage: S3_BUCKET=... [YTDLP_PROXY=socks5://host:port] [YTDLP_COOKIES=cookies.txt] [JOBS=1] ./ingest.sh [genre...]
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -34,6 +34,9 @@ done
 YTDLP=(yt-dlp --no-warnings --quiet --no-progress
   --sleep-requests 5 --sleep-interval 120 --max-sleep-interval 300)
 [[ -n "${YTDLP_COOKIES:-}" ]] && YTDLP+=(--cookies "$YTDLP_COOKIES")
+# e.g. socks5://localhost:1055 = Tailscale exit node (residential IP). No fallback:
+# if the proxy is down, downloads fail and the run stops.
+[[ -n "${YTDLP_PROXY:-}" ]] && YTDLP+=(--proxy "$YTDLP_PROXY")
 export S3_BUCKET; export YTDLP_STR="${YTDLP[*]}"
 
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
