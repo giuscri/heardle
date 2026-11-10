@@ -1,6 +1,6 @@
-export default function GenreCard({ i, genreHuman, artworkSrc, url, title, artist, thumbnail }) {
+export default function GenreCard({ i, genreHuman, genreId, artworkSrc, songId }) {
     return (
-        <a href={`/play?audio-src=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}&thumbnail-src=${encodeURIComponent(thumbnail)}`}>
+        <a href={songId ? `/play?genre=${encodeURIComponent(genreId)}&id=${encodeURIComponent(songId)}` : undefined}>
             <div className="text-center text-sm">
                 <p className="text-lime-50" style={{textShadow: 'yellow 1px 0 10px'}}>{genreHuman}</p>
                 <div className="relative flex justify-center items-center transition-all duration-500 delay-75 hover:shadow-lime-50 hover:scale-110 focus:scale-110">

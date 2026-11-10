@@ -1,5 +1,6 @@
 import { useState } from "react"
 import confetti from "canvas-confetti"
+import { findSong, signedUrl } from "../lib/s3"
 
 export default function Play({ title, url, thumbnail }) {
   const MAX_SCORE = 5000
@@ -70,16 +71,17 @@ export default function Play({ title, url, thumbnail }) {
         <button id="guess" onClick={guessHandler} disabled={playing} className={`rounded ${ !playing && 'text-emerald-400 hover:scale-110 focus:scale-110 outline-0' } p-1 transition-all duration-500`}>Tell me</button>
       </div>
 
-      <audio src={url} />
+      <audio src={url} preload="auto" />
     </div>
   )
 }
 
 export async function getServerSideProps({ query }) {
-  const url = decodeURIComponent(query['audio-src'])
-  const title = decodeURIComponent(query['title'])
-  const thumbnail = decodeURIComponent(query['thumbnail-src'])
-  // const artist = decodeURIComponent(query['artist'])
-  // return { props: { title, artist, url, thumbnail }}
-  return { props: { title, url, thumbnail }}
+  const song = await findSong(String(query.genre || ''), String(query.id || ''))
+  if (!song) return { redirect: { destination: '/', permanent: false } }
+  const [url, thumbnail] = await Promise.all([
+    signedUrl(`songs/${song.id}.mp3`),
+    signedUrl(`thumbs/${song.id}.jpg`),
+  ])
+  return { props: { title: song.title, url, thumbnail } }
 }
