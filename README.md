@@ -16,7 +16,7 @@ The browser gets short-lived presigned URLs; the bucket stays private.
 
 ## Populate / update songs
 
-Needs `yt-dlp`, `ffmpeg`, `jq`, `aws`. Playlists are in `scripts/playlists.txt`.
+Needs `yt-dlp`, `deno` (yt-dlp uses it to solve YouTube JS challenges), `ffmpeg`, `jq`, `aws`. Downloads one song at a time with random 5-15s pauses to avoid rate limits. Playlists are in `scripts/playlists.txt`.
 Idempotent: re-run whenever playlists change, only new songs are downloaded.
 
 ```

@@ -11,17 +11,20 @@
 # Idempotent: songs already in S3 are skipped, so re-run it whenever the
 # playlists change.
 #
-# Usage: S3_BUCKET=... [YTDLP_COOKIES=cookies.txt] [JOBS=4] ./ingest.sh [genre...]
+# Needs deno (JS runtime used by yt-dlp to solve YouTube challenges).
+#
+# Usage: S3_BUCKET=... [YTDLP_COOKIES=cookies.txt] [JOBS=1] ./ingest.sh [genre...]
 set -euo pipefail
 cd "$(dirname "$0")"
 
 : "${S3_BUCKET:?set S3_BUCKET}"
-JOBS="${JOBS:-4}"
-for cmd in yt-dlp ffmpeg jq aws; do
+JOBS="${JOBS:-1}"   # keep it low: YouTube rate-limits aggressively
+for cmd in yt-dlp ffmpeg jq aws deno; do
   command -v "$cmd" >/dev/null || { echo "missing $cmd" >&2; exit 1; }
 done
 
-YTDLP=(yt-dlp --no-warnings --quiet --no-progress)
+YTDLP=(yt-dlp --no-warnings --quiet --no-progress
+  --sleep-requests 1 --sleep-interval 5 --max-sleep-interval 15)
 [[ -n "${YTDLP_COOKIES:-}" ]] && YTDLP+=(--cookies "$YTDLP_COOKIES")
 export S3_BUCKET; export YTDLP_STR="${YTDLP[*]}"
 
@@ -35,7 +38,7 @@ fetch_one() {  # $1 = video id; $2 = work dir
   local id=$1 dir=$2/dl/$1
   [[ -f "$2/meta/$id.json" ]] && return 0
   mkdir -p "$dir"
-  if ! $YTDLP_STR -f bestaudio -x --audio-format mp3 --postprocessor-args "ffmpeg:-b:a 128k" \
+  if ! $YTDLP_STR -f bestaudio -x --audio-format mp3 --audio-quality 128K \
       --write-thumbnail --convert-thumbnails jpg --write-info-json \
       -o "$dir/a.%(ext)s" -o "thumbnail:$dir/a.%(ext)s" -o "infojson:$dir/a" \
       "https://www.youtube.com/watch?v=$id"; then
