@@ -7,13 +7,15 @@
 #   thumbs/<id>.jpg       cover
 #   meta/<id>.json        { id, title, artist }
 #   catalog/<genre>.json  [ { id, title, artist }, ... ]  <- read by the webapp
+#   failed/<id>           last failure reason; skipped for RETRY_FAILED_DAYS
 #
 # Idempotent: songs already in S3 are skipped, so re-run it whenever the
 # playlists change. Catalogs are rewritten after every song, so the site
 # fills up while this runs.
 #
-# Gentle with YouTube: one song at a time with random pauses. On a bot check
-# ("rate limited") it stops and exits 75; run-until-done.sh retries later.
+# Gentle with YouTube: one song at a time, 2-5 min apart. It stops and exits 75
+# (run-until-done.sh retries later) on a bot check, or after SOFT_FAIL_LIMIT
+# consecutive age-check/unavailable errors, which YouTube also uses when throttling.
 #
 # Needs deno (JS runtime used by yt-dlp to solve YouTube challenges).
 #
@@ -23,20 +25,26 @@ cd "$(dirname "$0")"
 
 : "${S3_BUCKET:?set S3_BUCKET}"
 JOBS="${JOBS:-1}"   # keep it low: YouTube rate-limits aggressively
+export SOFT_FAIL_LIMIT="${SOFT_FAIL_LIMIT:-3}"
+RETRY_FAILED_DAYS="${RETRY_FAILED_DAYS:-7}"
 for cmd in yt-dlp ffmpeg jq aws deno; do
   command -v "$cmd" >/dev/null || { echo "missing $cmd" >&2; exit 1; }
 done
 
 YTDLP=(yt-dlp --no-warnings --quiet --no-progress
-  --sleep-requests 2 --sleep-interval 30 --max-sleep-interval 90)
+  --sleep-requests 5 --sleep-interval 120 --max-sleep-interval 300)
 [[ -n "${YTDLP_COOKIES:-}" ]] && YTDLP+=(--cookies "$YTDLP_COOKIES")
 export S3_BUCKET; export YTDLP_STR="${YTDLP[*]}"
 
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/meta"
+mkdir -p "$work/meta" "$work/failed"; echo 0 > "$work/softfails"; : > "$work/streak"
 
 echo "### syncing existing metadata from s3://$S3_BUCKET/meta/"
 aws s3 sync --only-show-errors "s3://$S3_BUCKET/meta/" "$work/meta/"
+aws s3 sync --only-show-errors "s3://$S3_BUCKET/failed/" "$work/failed/"
+# failures older than RETRY_FAILED_DAYS get another chance
+find "$work/failed" -type f -mtime +"$RETRY_FAILED_DAYS" -delete
+echo "### $(ls "$work/meta" | wc -l) songs done, $(ls "$work/failed" | wc -l) recently failed (skipped)"
 
 write_catalog() {  # $1 = genre; $2 = work dir. Lists only songs fully in S3 (meta present).
   while read -r id; do
@@ -47,18 +55,38 @@ write_catalog() {  # $1 = genre; $2 = work dir. Lists only songs fully in S3 (me
 }
 export -f write_catalog
 
+unblame_streak() {  # failures right before a throttling stop were probably throttling too
+  while read -r f; do rm -f "$1/failed/$f"; aws s3 rm --only-show-errors "s3://$S3_BUCKET/failed/$f"; done < "$1/streak"
+}
+export -f unblame_streak
+
 fetch_one() {  # $1 = video id; $2 = work dir; $GENRE = genre being processed
   local id=$1 dir=$2/dl/$1
-  [[ -f "$2/meta/$id.json" || -f "$2/STOP" ]] && return 0
+  [[ -f "$2/meta/$id.json" || -f "$2/failed/$id" || -f "$2/STOP" ]] && return 0
   mkdir -p "$dir"
   if ! $YTDLP_STR -f bestaudio -x --audio-format mp3 --audio-quality 128K \
       --write-thumbnail --convert-thumbnails jpg --write-info-json \
       -o "$dir/a.%(ext)s" -o "thumbnail:$dir/a.%(ext)s" -o "infojson:$dir/a" \
       "https://www.youtube.com/watch?v=$id" 2>"$dir/err"; then
     cat "$dir/err" >&2
-    # bot check = we are being rate limited: stop hammering YouTube
-    if grep -q "not a bot" "$dir/err"; then echo "!!! rate limited by YouTube, stopping" >&2; touch "$2/STOP"; fi
-    echo "!!! failed $id" >&2; rm -rf "$dir"; return 0
+    echo "!!! failed $id" >&2
+    if grep -q "not a bot" "$dir/err"; then
+      # bot check = we are being rate limited: stop hammering YouTube (song is retried next run)
+      echo "!!! rate limited by YouTube, stopping" >&2; touch "$2/STOP"
+      unblame_streak "$2"
+    else
+      local n=$(( $(cat "$2/softfails") + 1 )); echo "$n" > "$2/softfails"; touch "$2/streak"
+      if (( n >= SOFT_FAIL_LIMIT )); then
+        # several failures in a row smells like throttling: stop, don't blame the songs
+        echo "!!! $n failures in a row, probably throttled, stopping" >&2; touch "$2/STOP"
+        unblame_streak "$2"
+      else
+        grep -m1 ERROR "$dir/err" | cut -c1-200 > "$2/failed/$id"
+        aws s3 cp --only-show-errors "$2/failed/$id" "s3://$S3_BUCKET/failed/$id"
+        echo "$id" >> "$2/streak"
+      fi
+    fi
+    rm -rf "$dir"; return 0
   fi
   jq -c '{id: .id, title: (.track // .title), artist: (.artist // .creator // .uploader // .channel // "" | sub(" - Topic$"; ""))}' \
     "$dir/a.info.json" > "$dir/meta.json"
@@ -66,7 +94,7 @@ fetch_one() {  # $1 = video id; $2 = work dir; $GENRE = genre being processed
   aws s3 cp --only-show-errors --content-type image/jpeg "$dir/a.jpg" "s3://$S3_BUCKET/thumbs/$id.jpg"
   # meta last: its presence marks the song as complete
   aws s3 cp --only-show-errors --content-type application/json "$dir/meta.json" "s3://$S3_BUCKET/meta/$id.json"
-  mv "$dir/meta.json" "$2/meta/$id.json"; rm -rf "$dir"
+  mv "$dir/meta.json" "$2/meta/$id.json"; rm -rf "$dir"; echo 0 > "$2/softfails"; : > "$2/streak"
   echo "+++ $(jq -r '"\(.artist) - \(.title)"' "$2/meta/$id.json")"
   write_catalog "$GENRE" "$2"
 }
