@@ -13,7 +13,7 @@
 # playlists change. Catalogs are rewritten after every song, so the site
 # fills up while this runs.
 #
-# Gentle with YouTube: one song at a time, 2-5 min apart. It stops and exits 75
+# Gentle with YouTube: one song at a time, SLEEP_MIN-SLEEP_MAX seconds apart (default 30-90). It stops and exits 75
 # (run-until-done.sh retries later) on a bot check, or after SOFT_FAIL_LIMIT
 # consecutive other errors (e.g. age checks), which YouTube also uses when throttling.
 # "Video unavailable" is per-video (label/region blocks): skipped, not a throttle signal.
@@ -33,7 +33,7 @@ for cmd in yt-dlp ffmpeg jq aws deno; do
 done
 
 YTDLP=(yt-dlp --no-warnings --quiet --no-progress
-  --sleep-requests 5 --sleep-interval 120 --max-sleep-interval 300)
+  --sleep-requests "${SLEEP_REQUESTS:-2}" --sleep-interval "${SLEEP_MIN:-30}" --max-sleep-interval "${SLEEP_MAX:-90}")
 [[ -n "${YTDLP_COOKIES:-}" ]] && YTDLP+=(--cookies "$YTDLP_COOKIES")
 # e.g. socks5://localhost:1055 = Tailscale exit node (residential IP). No fallback:
 # if the proxy is down, downloads fail and the run stops.
