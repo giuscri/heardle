@@ -15,7 +15,8 @@
 #
 # Gentle with YouTube: one song at a time, 2-5 min apart. It stops and exits 75
 # (run-until-done.sh retries later) on a bot check, or after SOFT_FAIL_LIMIT
-# consecutive age-check/unavailable errors, which YouTube also uses when throttling.
+# consecutive other errors (e.g. age checks), which YouTube also uses when throttling.
+# "Video unavailable" is per-video (label/region blocks): skipped, not a throttle signal.
 #
 # Needs deno (JS runtime used by yt-dlp to solve YouTube challenges).
 #
@@ -77,6 +78,10 @@ fetch_one() {  # $1 = video id; $2 = work dir; $GENRE = genre being processed
       # bot check = we are being rate limited: stop hammering YouTube (song is retried next run)
       echo "!!! rate limited by YouTube, stopping" >&2; touch "$2/STOP"
       unblame_streak "$2"
+    elif grep -q "Video unavailable" "$dir/err"; then
+      # blocked/removed for this video only; consistent across IPs, not a throttling signal
+      grep -m1 ERROR "$dir/err" | cut -c1-200 > "$2/failed/$id"
+      aws s3 cp --only-show-errors "$2/failed/$id" "s3://$S3_BUCKET/failed/$id"
     else
       local n=$(( $(cat "$2/softfails") + 1 )); echo "$n" > "$2/softfails"; touch "$2/streak"
       if (( n >= SOFT_FAIL_LIMIT )); then
