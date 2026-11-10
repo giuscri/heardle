@@ -36,12 +36,15 @@ aws s3 sync --only-show-errors "s3://$S3_BUCKET/meta/" "$work/meta/"
 
 fetch_one() {  # $1 = video id; $2 = work dir
   local id=$1 dir=$2/dl/$1
-  [[ -f "$2/meta/$id.json" ]] && return 0
+  [[ -f "$2/meta/$id.json" || -f "$2/STOP" ]] && return 0
   mkdir -p "$dir"
   if ! $YTDLP_STR -f bestaudio -x --audio-format mp3 --audio-quality 128K \
       --write-thumbnail --convert-thumbnails jpg --write-info-json \
       -o "$dir/a.%(ext)s" -o "thumbnail:$dir/a.%(ext)s" -o "infojson:$dir/a" \
-      "https://www.youtube.com/watch?v=$id"; then
+      "https://www.youtube.com/watch?v=$id" 2>"$dir/err"; then
+    cat "$dir/err" >&2
+    # bot check = we are being rate limited: stop hammering YouTube
+    grep -q "not a bot" "$dir/err" && { echo "!!! rate limited by YouTube, stopping" >&2; touch "$2/STOP"; }
     echo "!!! failed $id" >&2; rm -rf "$dir"; return 0
   fi
   jq -c '{id: .id, title: (.track // .title), artist: (.artist // .creator // .uploader // .channel // "" | sub(" - Topic$"; ""))}' \
@@ -61,10 +64,12 @@ grep -Ev '^\s*(#|$)' playlists.txt | while read -r genre url; do
   $YTDLP_STR --flat-playlist --print id "$url" > "$work/$genre.ids" || true
   if [[ ! -s "$work/$genre.ids" ]]; then echo "!!! $genre: empty/unreachable playlist, catalog untouched" >&2; continue; fi
   echo "### $genre: $(wc -l < "$work/$genre.ids") songs in playlist"
+  [[ -f "$work/STOP" ]] && break
   xargs -a "$work/$genre.ids" -P "$JOBS" -I{} bash -c 'fetch_one "$1" "$2"' _ {} "$work"
   ( while read -r id; do [[ -f "$work/meta/$id.json" ]] && cat "$work/meta/$id.json"; done < "$work/$genre.ids" ) \
     | jq -s 'unique_by(.id)' > "$work/$genre.catalog.json"
   aws s3 cp --only-show-errors --content-type application/json --cache-control no-cache \
     "$work/$genre.catalog.json" "s3://$S3_BUCKET/catalog/$genre.json"
+  [[ -f "$work/STOP" ]] && { echo "!!! stopped early; re-run later to continue" >&2; break; }
   echo "### $genre: catalog has $(jq length "$work/$genre.catalog.json") songs"
 done
