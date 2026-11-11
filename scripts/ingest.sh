@@ -18,6 +18,9 @@
 # consecutive other errors (e.g. age checks), which YouTube also uses when throttling.
 # "Video unavailable" is per-video (label/region blocks): skipped, not a throttle signal.
 #
+# Exits 69 when the proxy (exit node) is unreachable: nothing is wrong with
+# YouTube, just wait for it to come back.
+#
 # Needs deno (JS runtime used by yt-dlp to solve YouTube challenges).
 #
 # Usage: S3_BUCKET=... [YTDLP_PROXY=socks5://host:port] [YTDLP_COOKIES=cookies.txt] [JOBS=1] ./ingest.sh [genre...]
@@ -39,6 +42,13 @@ YTDLP=(yt-dlp --no-warnings --quiet --no-progress
 # if the proxy is down, downloads fail and the run stops.
 [[ -n "${YTDLP_PROXY:-}" ]] && YTDLP+=(--proxy "$YTDLP_PROXY")
 export S3_BUCKET; export YTDLP_STR="${YTDLP[*]}"
+
+proxy_ok() {
+  [[ -z "${YTDLP_PROXY:-}" ]] && return 0
+  [[ "$(curl -s --max-time 20 -x "${YTDLP_PROXY/socks5:/socks5h:}" -o /dev/null -w '%{http_code}' https://www.youtube.com/generate_204)" == 204 ]]
+}
+export -f proxy_ok
+if ! proxy_ok; then echo "!!! proxy $YTDLP_PROXY unreachable (exit node offline?)" >&2; exit 69; fi
 
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/meta" "$work/failed"; echo 0 > "$work/softfails"; : > "$work/streak"
@@ -74,7 +84,11 @@ fetch_one() {  # $1 = video id; $2 = work dir; $GENRE = genre being processed
       "https://www.youtube.com/watch?v=$id" 2>"$dir/err"; then
     cat "$dir/err" >&2
     echo "!!! failed $id" >&2
-    if grep -q "not a bot" "$dir/err"; then
+    if grep -qE "SOCKS|ProxyError|Unable to download API page|timed out" "$dir/err" && ! proxy_ok; then
+      # our network/exit node is down: not the song's fault, not throttling
+      echo "!!! proxy unreachable, stopping" >&2; touch "$2/OFFLINE" "$2/STOP"
+      unblame_streak "$2"
+    elif grep -q "not a bot" "$dir/err"; then
       # bot check = we are being rate limited: stop hammering YouTube (song is retried next run)
       echo "!!! rate limited by YouTube, stopping" >&2; touch "$2/STOP"
       unblame_streak "$2"
@@ -112,10 +126,16 @@ grep -Ev '^\s*(#|$)' playlists.txt | while read -r genre url; do
   [[ $# -gt 0 && ! " $* " =~ " $genre " ]] && continue
   echo "### $genre: listing $url"
   $YTDLP_STR --flat-playlist --print id "$url" > "$work/$genre.ids" || true
-  if [[ ! -s "$work/$genre.ids" ]]; then echo "!!! $genre: empty/unreachable playlist, catalog untouched" >&2; continue; fi
+  if [[ ! -s "$work/$genre.ids" ]]; then
+    if ! proxy_ok; then echo "!!! proxy unreachable while listing $genre, stopping" >&2; exit 69; fi
+    echo "!!! $genre: empty/unreachable playlist, catalog untouched" >&2; touch "$work/INCOMPLETE"; continue
+  fi
   echo "### $genre: $(wc -l < "$work/$genre.ids") songs in playlist"
   GENRE=$genre xargs -a "$work/$genre.ids" -P "$JOBS" -I{} bash -c 'fetch_one "$1" "$2"' _ {} "$work"
   write_catalog "$genre" "$work"
   echo "### $genre: catalog has $(jq length "$work/$genre.catalog.json") songs"
+  if [[ -f "$work/OFFLINE" ]]; then echo "!!! stopped: proxy offline" >&2; exit 69; fi
   if [[ -f "$work/STOP" ]]; then echo "!!! stopped early; re-run later to continue" >&2; exit 75; fi
 done
+# a playlist that couldn't be listed (while the network was fine) = not done
+if [[ -f "$work/INCOMPLETE" ]]; then exit 75; fi
