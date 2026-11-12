@@ -23,12 +23,12 @@
 #
 # Needs deno (JS runtime used by yt-dlp to solve YouTube challenges).
 #
-# Usage: S3_BUCKET=... [YTDLP_PROXY=socks5://host:port] [YTDLP_COOKIES=cookies.txt] [JOBS=1] ./ingest.sh [genre...]
+# Usage: S3_BUCKET=... [YTDLP_PROXY=socks5://host:port] [YTDLP_COOKIES=cookies.txt] [JOBS=2] ./ingest.sh [genre...]
 set -euo pipefail
 cd "$(dirname "$0")"
 
 : "${S3_BUCKET:?set S3_BUCKET}"
-JOBS="${JOBS:-1}"   # keep it low: YouTube rate-limits aggressively
+JOBS="${JOBS:-2}"   # keep it low: YouTube rate-limits aggressively
 export SOFT_FAIL_LIMIT="${SOFT_FAIL_LIMIT:-3}"
 RETRY_FAILED_DAYS="${RETRY_FAILED_DAYS:-7}"
 for cmd in yt-dlp ffmpeg jq aws deno; do
@@ -61,11 +61,15 @@ find "$work/failed" -type f -mtime +"$RETRY_FAILED_DAYS" -delete
 echo "### $(ls "$work/meta" | wc -l) songs done, $(ls "$work/failed" | wc -l) recently failed (skipped)"
 
 write_catalog() {  # $1 = genre; $2 = work dir. Lists only songs fully in S3 (meta present).
-  while read -r id; do
-    if [[ -f "$2/meta/$id.json" ]]; then cat "$2/meta/$id.json"; fi
-  done < "$2/$1.ids" | jq -s 'unique_by(.id)' > "$2/$1.catalog.json"
-  aws s3 cp --only-show-errors --content-type application/json --cache-control no-cache \
-    "$2/$1.catalog.json" "s3://$S3_BUCKET/catalog/$1.json"
+  # serialized: with JOBS>1 several downloads finish concurrently
+  (
+    flock 9
+    while read -r id; do
+      if [[ -f "$2/meta/$id.json" ]]; then cat "$2/meta/$id.json"; fi
+    done < "$2/$1.ids" | jq -s 'unique_by(.id)' > "$2/$1.catalog.json"
+    aws s3 cp --only-show-errors --content-type application/json --cache-control no-cache \
+      "$2/$1.catalog.json" "s3://$S3_BUCKET/catalog/$1.json"
+  ) 9>"$2/catalog.lock"
 }
 export -f write_catalog
 
